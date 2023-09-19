@@ -8,6 +8,7 @@ package mysql_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -303,7 +304,7 @@ func Test_DB_Insert_NilGjson(t *testing.T) {
 	})
 }
 
-func Test_DB_Upadte_KeyFieldNameMapping(t *testing.T) {
+func Test_DB_Update_KeyFieldNameMapping(t *testing.T) {
 	table := createInitTable()
 	defer dropTable(table)
 
@@ -892,8 +893,7 @@ func Test_DB_ToJson(t *testing.T) {
 		t.Assert(users[0].CreateTime, resultJson.Get("0.create_time").String())
 
 		result = nil
-		err = result.Structs(&users)
-		t.AssertNil(err)
+		t.Assert(result.Structs(&users), sql.ErrNoRows)
 	})
 
 	gtest.C(t, func(t *gtest.T) {
@@ -1404,29 +1404,18 @@ func Test_Model_LeftJoin(t *testing.T) {
 		defer dropTable(table2)
 
 		res, err := db.Model(table2).Where("id > ?", 3).Delete()
-		if err != nil {
-			t.Fatal(err)
-		}
+		t.AssertNil(err)
 
 		n, err := res.RowsAffected()
-		if err != nil {
-			t.Fatal(err)
-		} else {
-			t.Assert(n, 7)
-		}
+		t.AssertNil(err)
+		t.Assert(n, 7)
 
 		result, err := db.Model(table1+" u1").LeftJoin(table2+" u2", "u1.id = u2.id").All()
-		if err != nil {
-			t.Fatal(err)
-		}
-
+		t.AssertNil(err)
 		t.Assert(len(result), 10)
 
 		result, err = db.Model(table1+" u1").LeftJoin(table2+" u2", "u1.id = u2.id").Where("u1.id > ? ", 2).All()
-		if err != nil {
-			t.Fatal(err)
-		}
-
+		t.AssertNil(err)
 		t.Assert(len(result), 8)
 	})
 }

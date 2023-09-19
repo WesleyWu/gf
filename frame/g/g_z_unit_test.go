@@ -1,10 +1,18 @@
+// Copyright GoFrame Author(https://goframe.org). All Rights Reserved.
+//
+// This Source Code Form is subject to the terms of the MIT License.
+// If a copy of the MIT was not distributed with this file,
+// You can obtain one at https://github.com/gogf/gf.
+
 package g_test
 
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 
+	"github.com/gogf/gf/v2/container/garray"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/test/gtest"
 	"github.com/gogf/gf/v2/util/gutil"
@@ -106,5 +114,21 @@ func Test_Object(t *testing.T) {
 		t.AssertNE(g.Res(), nil)
 		t.AssertNE(g.Log(), nil)
 		t.AssertNE(g.Validator(), nil)
+	})
+}
+
+func Test_Go(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		var (
+			wg    = sync.WaitGroup{}
+			array = garray.NewArray(true)
+		)
+		wg.Add(1)
+		g.Go(context.Background(), func(ctx context.Context) {
+			defer wg.Done()
+			array.Append(1)
+		}, nil)
+		wg.Wait()
+		t.Assert(array.Len(), 1)
 	})
 }

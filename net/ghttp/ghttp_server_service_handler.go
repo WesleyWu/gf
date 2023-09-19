@@ -184,21 +184,23 @@ func (s *Server) checkAndCreateFuncInfo(f interface{}, pkgPath, structName, meth
 		}
 
 		// The request struct should be named as `xxxReq`.
-		if !gstr.HasSuffix(reflectType.In(1).String(), `Req`) {
+		reqStructName := trimGeneric(reflectType.In(1).String())
+		if !gstr.HasSuffix(reqStructName, `Req`) {
 			err = gerror.NewCodef(
 				gcode.CodeInvalidParameter,
 				`invalid struct naming for request: defined as "%s", but it should be named with "Req" suffix like "XxxReq"`,
-				reflectType.In(1).String(),
+				reqStructName,
 			)
 			return
 		}
 
 		// The response struct should be named as `xxxRes`.
-		if !gstr.HasSuffix(reflectType.Out(0).String(), `Res`) {
+		resStructName := trimGeneric(reflectType.Out(0).String())
+		if !gstr.HasSuffix(resStructName, `Res`) {
 			err = gerror.NewCodef(
 				gcode.CodeInvalidParameter,
 				`invalid struct naming for response: defined as "%s", but it should be named with "Res" suffix like "XxxRes"`,
-				reflectType.Out(0).String(),
+				resStructName,
 			)
 			return
 		}
@@ -207,4 +209,17 @@ func (s *Server) checkAndCreateFuncInfo(f interface{}, pkgPath, structName, meth
 	info.Type = reflect.TypeOf(f)
 	info.Value = reflect.ValueOf(f)
 	return
+}
+
+// trimGeneric removes type definitions string from response type name if generic
+func trimGeneric(structName string) string {
+	var (
+		leftBraceIndex  = strings.LastIndex(structName, "[")
+		rightBraceIndex = strings.LastIndex(structName, "]")
+	)
+	if leftBraceIndex == -1 && rightBraceIndex == -1 {
+		// no generic type usage.
+		return structName
+	}
+	return structName[:leftBraceIndex]
 }

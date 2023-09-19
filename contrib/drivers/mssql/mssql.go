@@ -7,9 +7,8 @@
 // Package mssql implements gdb.Driver, which supports operations for database MSSql.
 //
 // Note:
-// 1. It needs manually import: _ "github.com/denisenkom/go-mssqldb"
-// 2. It does not support Save/Replace features.
-// 3. It does not support LastInsertId.
+// 1. It does not support Save/Replace features.
+// 2. It does not support LastInsertId.
 package mssql
 
 import (
@@ -105,17 +104,14 @@ func (d *Driver) GetChars() (charLeft string, charRight string) {
 
 // DoFilter deals with the sql string before commits it to underlying sql driver.
 func (d *Driver) DoFilter(ctx context.Context, link gdb.Link, sql string, args []interface{}) (newSql string, newArgs []interface{}, err error) {
-	defer func() {
-		newSql, newArgs, err = d.Core.DoFilter(ctx, link, newSql, newArgs)
-	}()
 	var index int
 	// Convert placeholder char '?' to string "@px".
-	str, _ := gregex.ReplaceStringFunc("\\?", sql, func(s string) string {
+	newSql, _ = gregex.ReplaceStringFunc("\\?", sql, func(s string) string {
 		index++
 		return fmt.Sprintf("@p%d", index)
 	})
-	str, _ = gregex.ReplaceString("\"", "", str)
-	return d.parseSql(str), args, nil
+	newSql, _ = gregex.ReplaceString("\"", "", newSql)
+	return d.Core.DoFilter(ctx, link, d.parseSql(newSql), args)
 }
 
 // parseSql does some replacement of the sql before commits it to underlying driver,
@@ -300,14 +296,20 @@ ORDER BY a.id,a.colorder`,
 	return fields, nil
 }
 
-// DoInsert is not supported in mssql.
+// DoInsert inserts or updates data forF given table.
 func (d *Driver) DoInsert(ctx context.Context, link gdb.Link, table string, list gdb.List, option gdb.DoInsertOption) (result sql.Result, err error) {
 	switch option.InsertOption {
 	case gdb.InsertOptionSave:
-		return nil, gerror.NewCode(gcode.CodeNotSupported, `Save operation is not supported by mssql driver`)
+		return nil, gerror.NewCode(
+			gcode.CodeNotSupported,
+			`Save operation is not supported by mssql driver`,
+		)
 
 	case gdb.InsertOptionReplace:
-		return nil, gerror.NewCode(gcode.CodeNotSupported, `Replace operation is not supported by mssql driver`)
+		return nil, gerror.NewCode(
+			gcode.CodeNotSupported,
+			`Replace operation is not supported by mssql driver`,
+		)
 
 	default:
 		return d.Core.DoInsert(ctx, link, table, list, option)

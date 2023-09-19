@@ -18,17 +18,16 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
+
 	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/errors/gcode"
 	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/os/gctx"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/text/gregex"
-	"github.com/gogf/gf/v2/util/gconv"
-	"github.com/gogf/gf/v2/util/gtag"
 	"github.com/gogf/gf/v2/util/gutil"
-	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
 // Driver is the driver for postgresql database.
@@ -50,7 +49,6 @@ const (
 	filterTypePattern                = `(?i)^UPDATE|DELETE`
 	replaceSchemaPattern             = `@(.+?)/([\w\.\-]+)+`
 	needParsedSqlInCtx   gctx.StrKey = "NeedParsedSql"
-	OrmTagForStruct                  = gtag.ORM
 	driverName                       = "clickhouse"
 )
 
@@ -139,9 +137,7 @@ func (d *Driver) Tables(ctx context.Context, schema ...string) (tables []string,
 
 // TableFields retrieves and returns the fields' information of specified table of current schema.
 // Also see DriverMysql.TableFields.
-func (d *Driver) TableFields(
-	ctx context.Context, table string, schema ...string,
-) (fields map[string]*gdb.TableField, err error) {
+func (d *Driver) TableFields(ctx context.Context, table string, schema ...string) (fields map[string]*gdb.TableField, err error) {
 	var (
 		result     gdb.Result
 		link       gdb.Link
@@ -224,9 +220,8 @@ func (d *Driver) DoFilter(
 	if len(args) == 0 {
 		return originSql, args, nil
 	}
-
-	var index int
 	// Convert placeholder char '?' to string "$x".
+	var index int
 	originSql, _ = gregex.ReplaceStringFunc(`\?`, originSql, func(s string) string {
 		index++
 		return fmt.Sprintf(`$%d`, index)
@@ -251,9 +246,12 @@ func (d *Driver) DoFilter(
 	case "UPDATE":
 		// MySQL eg: UPDATE table_name SET field1=new-value1, field2=new-value2 [WHERE Clause]
 		// Clickhouse eg: ALTER TABLE [db.]table UPDATE column1 = expr1 [, ...] WHERE filter_expr
-		newSql, err = gregex.ReplaceStringFuncMatch(updateFilterPattern, originSql, func(s []string) string {
-			return fmt.Sprintf("ALTER TABLE %s UPDATE", s[1])
-		})
+		newSql, err = gregex.ReplaceStringFuncMatch(
+			updateFilterPattern, originSql,
+			func(s []string) string {
+				return fmt.Sprintf("ALTER TABLE %s UPDATE", s[1])
+			},
+		)
 		if err != nil {
 			return "", nil, err
 		}
@@ -262,9 +260,12 @@ func (d *Driver) DoFilter(
 	case "DELETE":
 		// MySQL eg: DELETE FROM table_name [WHERE Clause]
 		// Clickhouse eg: ALTER TABLE [db.]table [ON CLUSTER cluster] DELETE WHERE filter_expr
-		newSql, err = gregex.ReplaceStringFuncMatch(deleteFilterPattern, originSql, func(s []string) string {
-			return fmt.Sprintf("ALTER TABLE %s DELETE", s[1])
-		})
+		newSql, err = gregex.ReplaceStringFuncMatch(
+			deleteFilterPattern, originSql,
+			func(s []string) string {
+				return fmt.Sprintf("ALTER TABLE %s DELETE", s[1])
+			},
+		)
 		if err != nil {
 			return "", nil, err
 		}
@@ -280,6 +281,7 @@ func (d *Driver) DoCommit(ctx context.Context, in gdb.DoCommitInput) (out gdb.Do
 	return d.Core.DoCommit(ctx, in)
 }
 
+// DoInsert inserts or updates data forF given table.
 func (d *Driver) DoInsert(
 	ctx context.Context, link gdb.Link, table string, list gdb.List, option gdb.DoInsertOption,
 ) (result sql.Result, err error) {
@@ -298,13 +300,20 @@ func (d *Driver) DoInsert(
 		keysStr      = charL + strings.Join(keys, charR+","+charL) + charR
 		holderStr    = strings.Join(valueHolder, ",")
 		tx           gdb.TX
-		stdSqlResult sql.Result
 		stmt         *gdb.Stmt
 	)
 	tx, err = d.Core.Begin(ctx)
 	if err != nil {
 		return
 	}
+	// It here uses defer to guarantee transaction be committed or roll-backed.
+	defer func() {
+		if err == nil {
+			_ = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+	}()
 	stmt, err = tx.Prepare(fmt.Sprintf(
 		"INSERT INTO %s(%s) VALUES (%s)",
 		d.QuotePrefixTableName(table), keysStr,
@@ -314,99 +323,94 @@ func (d *Driver) DoInsert(
 		return
 	}
 	for i := 0; i < len(list); i++ {
-		params := make([]interface{}, 0) // Values that will be committed to underlying database driver.
+		// Values that will be committed to underlying database driver.
+		params := make([]interface{}, 0)
 		for _, k := range keys {
 			params = append(params, list[i][k])
 		}
 		// Prepare is allowed to execute only once in a transaction opened by clickhouse
-		stdSqlResult, err = stmt.ExecContext(ctx, params...)
+		result, err = stmt.ExecContext(ctx, params...)
 		if err != nil {
-			return stdSqlResult, err
+			return
 		}
 	}
-	return stdSqlResult, tx.Commit()
+	return
 }
 
-// ConvertDataForRecord converting for any data that will be inserted into table/collection as a record.
-func (d *Driver) ConvertDataForRecord(ctx context.Context, value interface{}) (map[string]interface{}, error) {
-	m := gconv.Map(value, OrmTagForStruct)
-
-	// transforms a value of a particular type
-	for k, v := range m {
-		switch itemValue := v.(type) {
-
-		case time.Time:
-			m[k] = itemValue
-			// If the time is zero, it then updates it to nil,
-			// which will insert/update the value to database as "null".
-			if itemValue.IsZero() {
-				m[k] = nil
-			}
-
-		case uuid.UUID:
-			m[k] = itemValue
-
-		case *time.Time:
-			m[k] = itemValue
-			// If the time is zero, it then updates it to nil,
-			// which will insert/update the value to database as "null".
-			if itemValue == nil || itemValue.IsZero() {
-				m[k] = nil
-			}
-
-		case gtime.Time:
-			// for gtime type, needs to get time.Time
-			m[k] = itemValue.Time
-			// If the time is zero, it then updates it to nil,
-			// which will insert/update the value to database as "null".
-			if itemValue.IsZero() {
-				m[k] = nil
-			}
-
-		case *gtime.Time:
-			// for gtime type, needs to get time.Time
-			if itemValue != nil {
-				m[k] = itemValue.Time
-			}
-			// If the time is zero, it then updates it to nil,
-			// which will insert/update the value to database as "null".
-			if itemValue == nil || itemValue.IsZero() {
-				m[k] = nil
-			}
-
-		case decimal.Decimal:
-			m[k] = itemValue
-
-		case *decimal.Decimal:
-			m[k] = nil
-			if itemValue != nil {
-				m[k] = *itemValue
-			}
-
-		default:
-			// if the other type implements valuer for the driver package
-			// the converted result is used
-			// otherwise the interface data is committed
-			valuer, ok := itemValue.(driver.Valuer)
-			if !ok {
-				m[k] = itemValue
-				continue
-			}
-			convertedValue, err := valuer.Value()
-			if err != nil {
-				return nil, err
-			}
-			m[k] = convertedValue
+// ConvertValueForField converts value to the type of the record field.
+func (d *Driver) ConvertValueForField(ctx context.Context, fieldType string, fieldValue interface{}) (interface{}, error) {
+	switch itemValue := fieldValue.(type) {
+	case time.Time:
+		// If the time is zero, it then updates it to nil,
+		// which will insert/update the value to database as "null".
+		if itemValue.IsZero() {
+			return nil, nil
 		}
+
+	case uuid.UUID:
+		return itemValue, nil
+
+	case *time.Time:
+		// If the time is zero, it then updates it to nil,
+		// which will insert/update the value to database as "null".
+		if itemValue == nil || itemValue.IsZero() {
+			return nil, nil
+		}
+		return itemValue, nil
+
+	case gtime.Time:
+		// If the time is zero, it then updates it to nil,
+		// which will insert/update the value to database as "null".
+		if itemValue.IsZero() {
+			return nil, nil
+		}
+		// for gtime type, needs to get time.Time
+		return itemValue.Time, nil
+
+	case *gtime.Time:
+		// for gtime type, needs to get time.Time
+		if itemValue != nil {
+			return itemValue.Time, nil
+		}
+		// If the time is zero, it then updates it to nil,
+		// which will insert/update the value to database as "null".
+		if itemValue == nil || itemValue.IsZero() {
+			return nil, nil
+		}
+
+	case decimal.Decimal:
+		return itemValue, nil
+
+	case *decimal.Decimal:
+		if itemValue != nil {
+			return *itemValue, nil
+		}
+		return nil, nil
+
+	default:
+		// if the other type implements valuer for the driver package
+		// the converted result is used
+		// otherwise the interface data is committed
+		valuer, ok := itemValue.(driver.Valuer)
+		if !ok {
+			return itemValue, nil
+		}
+		convertedValue, err := valuer.Value()
+		if err != nil {
+			return nil, err
+		}
+		return convertedValue, nil
 	}
-	return m, nil
+	return fieldValue, nil
 }
 
+// DoDelete does "DELETE FROM ... " statement for the table.
 func (d *Driver) DoDelete(ctx context.Context, link gdb.Link, table string, condition string, args ...interface{}) (result sql.Result, err error) {
 	ctx = d.injectNeedParsedSql(ctx)
 	return d.Core.DoDelete(ctx, link, table, condition, args...)
 }
 
+// DoUpdate does "UPDATE ... " statement for the table.
 func (d *Driver) DoUpdate(ctx context.Context, link gdb.Link, table string, data interface{}, condition string, args ...interface{}) (result sql.Result, err error) {
 	ctx = d.injectNeedParsedSql(ctx)
 	return d.Core.DoUpdate(ctx, link, table, data, condition, args...)
@@ -427,10 +431,12 @@ func (d *Driver) Replace(ctx context.Context, table string, data interface{}, ba
 	return nil, errUnsupportedReplace
 }
 
+// Begin starts and returns the transaction object.
 func (d *Driver) Begin(ctx context.Context) (tx gdb.TX, err error) {
 	return nil, errUnsupportedBegin
 }
 
+// Transaction wraps the transaction logic using function `f`.
 func (d *Driver) Transaction(ctx context.Context, f func(ctx context.Context, tx gdb.TX) error) error {
 	return errUnsupportedTransaction
 }

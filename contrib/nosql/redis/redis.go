@@ -9,9 +9,11 @@ package redis
 
 import (
 	"context"
+	"crypto/tls"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
+
 	"github.com/gogf/gf/v2/container/gvar"
 	"github.com/gogf/gf/v2/database/gredis"
 	"github.com/gogf/gf/v2/errors/gerror"
@@ -43,30 +45,30 @@ func init() {
 func New(config *gredis.Config) *Redis {
 	fillWithDefaultConfiguration(config)
 	opts := &redis.UniversalOptions{
-		Addrs:        gstr.SplitAndTrim(config.Address, ","),
-		Username:     config.User,
-		Password:     config.Pass,
-		DB:           config.Db,
-		MaxRetries:   defaultMaxRetries,
-		PoolSize:     config.MaxActive,
-		MinIdleConns: config.MinIdle,
-		MaxConnAge:   config.MaxConnLifetime,
-		IdleTimeout:  config.IdleTimeout,
-		PoolTimeout:  config.WaitTimeout,
-		DialTimeout:  config.DialTimeout,
-		ReadTimeout:  config.ReadTimeout,
-		WriteTimeout: config.WriteTimeout,
-		MasterName:   config.MasterName,
-		TLSConfig:    config.TLSConfig,
+		Addrs:           gstr.SplitAndTrim(config.Address, ","),
+		Username:        config.User,
+		Password:        config.Pass,
+		DB:              config.Db,
+		MaxRetries:      defaultMaxRetries,
+		PoolSize:        config.MaxActive,
+		MinIdleConns:    config.MinIdle,
+		MaxIdleConns:    config.MaxIdle,
+		ConnMaxLifetime: config.MaxConnLifetime,
+		ConnMaxIdleTime: config.IdleTimeout,
+		PoolTimeout:     config.WaitTimeout,
+		DialTimeout:     config.DialTimeout,
+		ReadTimeout:     config.ReadTimeout,
+		WriteTimeout:    config.WriteTimeout,
+		MasterName:      config.MasterName,
+		TLSConfig:       config.TLSConfig,
 	}
 
 	var client redis.UniversalClient
-
 	if opts.MasterName != "" {
 		redisSentinel := opts.Failover()
-		redisSentinel.SlaveOnly = config.SlaveOnly
+		redisSentinel.ReplicaOnly = config.SlaveOnly
 		client = redis.NewFailoverClient(redisSentinel)
-	} else if len(opts.Addrs) > 1 {
+	} else if len(opts.Addrs) > 1 || config.Cluster {
 		client = redis.NewClusterClient(opts.Cluster())
 	} else {
 		client = redis.NewClient(opts.Simple())
@@ -133,5 +135,10 @@ func fillWithDefaultConfiguration(config *gredis.Config) {
 	}
 	if config.ReadTimeout == 0 {
 		config.ReadTimeout = -1
+	}
+	if config.TLSConfig == nil && config.TLS {
+		config.TLSConfig = &tls.Config{
+			InsecureSkipVerify: config.TLSSkipVerify,
+		}
 	}
 }

@@ -9,7 +9,7 @@ package ghttp
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -36,6 +36,7 @@ const (
 	tracingEventHttpResponse                    = "http.response"
 	tracingEventHttpResponseHeaders             = "http.response.headers"
 	tracingEventHttpResponseBody                = "http.response.body"
+	tracingEventHttpRequestUrl                  = "http.request.url"
 	tracingMiddlewareHandled        gctx.StrKey = `MiddlewareServerTracingHandled`
 )
 
@@ -64,7 +65,7 @@ func internalMiddlewareServerTracing(r *Request) {
 			ctx,
 			propagation.HeaderCarrier(r.Header),
 		),
-		r.URL.String(),
+		r.URL.Path,
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
 	defer span.End()
@@ -81,7 +82,7 @@ func internalMiddlewareServerTracing(r *Request) {
 	}
 
 	// Request content logging.
-	reqBodyContentBytes, err := ioutil.ReadAll(r.Body)
+	reqBodyContentBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		r.SetError(gerror.Wrap(err, `read request body failed`))
 		span.SetStatus(codes.Error, fmt.Sprintf(`%+v`, err))
@@ -90,6 +91,7 @@ func internalMiddlewareServerTracing(r *Request) {
 	r.Body = utils.NewReadCloser(reqBodyContentBytes, false)
 
 	span.AddEvent(tracingEventHttpRequest, trace.WithAttributes(
+		attribute.String(tracingEventHttpRequestUrl, r.URL.String()),
 		attribute.String(tracingEventHttpRequestHeaders, gconv.String(httputil.HeaderToMap(r.Header))),
 		attribute.String(tracingEventHttpRequestBaggage, gtrace.GetBaggageMap(ctx).String()),
 		attribute.String(tracingEventHttpRequestBody, gstr.StrLimit(
